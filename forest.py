@@ -16,6 +16,62 @@ SEED = 0
 SELECT_BY = "accuracy"
 
 
+# ---------- our own forest ----------
+class ForestClassifier:
+    """Bootstrap decision trees and classify by majority vote.
+
+    Each tree trains on a random sample of rows drawn with replacement.
+    max_features controls the random feature subset considered at each split.
+    """
+
+    def __init__(self, n_estimators=100, max_features="sqrt",
+                 random_state=SEED, **tree_params):
+        if not isinstance(n_estimators, int) or n_estimators < 1:
+            raise ValueError("n_estimators must be a positive integer")
+        self.n_estimators = n_estimators
+        self.max_features = max_features
+        self.random_state = random_state
+        self.tree_params = tree_params
+
+    def fit(self, X, y):
+        X, y = np.asarray(X), np.asarray(y)
+        if X.ndim != 2 or y.ndim != 1 or len(X) != len(y) or len(y) == 0:
+            raise ValueError("Expected nonempty 2D X and matching 1D y")
+
+        self.n_features_in_ = X.shape[1]
+        # Global class indices keep votes aligned if a sample omits a class.
+        self.classes_ = np.unique(y)
+        self.trees_ = []
+        rng = np.random.default_rng(self.random_state)
+        for _ in range(self.n_estimators):
+            sample_idx = rng.integers(0, len(y), size=len(y))
+            tree = DecisionTreeClassifier(
+                max_features=self.max_features,
+                random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
+                **self.tree_params,
+            )
+            tree.fit(X[sample_idx], y[sample_idx])
+            self.trees_.append(tree)
+        return self
+
+    def predict(self, X):
+        if not getattr(self, "trees_", None):
+            raise ValueError("Call fit before predict")
+        X = np.asarray(X)
+        if X.ndim != 2 or X.shape[1] != self.n_features_in_:
+            raise ValueError("X must have the same features as the training data")
+        if len(X) == 0:
+            return self.classes_[:0]
+
+        votes = np.zeros((len(X), len(self.classes_)), dtype=int)
+        rows = np.arange(len(X))
+        for tree in self.trees_:
+            predicted_class = np.searchsorted(self.classes_, tree.predict(X))
+            votes[rows, predicted_class] += 1
+        # Ties go to the first class in sorted order for reproducibility.
+        return self.classes_[votes.argmax(axis=1)]
+
+
 # ---------- data ----------
 def load(path):
     df = pd.read_csv(path)
