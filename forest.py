@@ -1,19 +1,28 @@
+# Cross validation Balance Accuracy = 93.5626 %
+"""Practical 4: Dry Bean trees and a hand-written forest.
+
+Bootstrap sampling, voting, stratified CV, and parameter selection are manual.
+Only individual trees and evaluation metrics come from sklearn.
+The recorded score uses the supplied training CSV, five folds, and SEED=0.
+Selected: 200 trees, max_features=0.5, max_depth=None, min_samples_leaf=1.
+Run: python forest.py [train.csv] [test.csv] [--output forest.csv]
 """
-2.1 Build a Tree -- Dry Bean dataset
-DecisionTreeClassifier + hand-written (stratified) k-fold cross validation.
-"""
+import argparse
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
-TRAIN_CSV = "dry_bean_train.csv"
-TEST_CSV = "dry_bean_test.csv"
+DATA_DIR = Path(__file__).resolve().parent
+TRAIN_CSV = DATA_DIR / "dry_bean_train.csv"
+TEST_CSV = DATA_DIR / "dry_bean_test.csv"
 LABEL_COL = "Class"
-PRED_CSV = "dry_bean_test_predictions.csv"
+PRED_CSV = DATA_DIR / "forest.csv"
 K = 5
 SEED = 0
-SELECT_BY = "accuracy"
+SELECT_BY = "balanced_accuracy"
 
 
 # ---------- our own forest ----------
@@ -84,83 +93,123 @@ def load(path):
 def make_folds(y, k, seed=SEED):
     """Stratified folds: split each class's indices into k parts separately,
     then fold i = part i of every class. Returns a list of k index arrays."""
+    y = np.asarray(y)
+    if y.ndim != 1 or not isinstance(k, int) or not 2 <= k <= len(y):
+        raise ValueError("Use 1D labels and 2 <= k <= number of samples")
+    classes, counts = np.unique(y, return_counts=True)
+    if counts.min() < k:
+        raise ValueError("Each class needs at least k samples for stratified CV")
     rng = np.random.default_rng(seed)
     folds = [[] for _ in range(k)]
-    for cls in np.unique(y):
+    for cls in classes:
         idx = np.where(y == cls)[0]
         rng.shuffle(idx)
         for i, part in enumerate(np.array_split(idx, k)):
             folds[i].extend(part)
-    return [np.array(f) for f in folds]
+    return [np.array(f, dtype=int) for f in folds]
 
 
-def cross_validate(params, X, y, k=K):
-    """Returns per-fold macro-F1, per-fold accuracy, and per-fold train macro-F1."""
+def cross_validate(params, X, y, k=K, model_class=ForestClassifier):
+    """Return per-fold scores, fitting a fresh model on training rows only."""
+    X, y = np.asarray(X), np.asarray(y)
+    if X.ndim != 2 or len(X) != len(y):
+        raise ValueError("Expected 2D X with one row per label")
     folds = make_folds(y, k)
-    val_f1, val_acc, train_f1 = [], [], []
-    for i in range(k):
-        val_idx = folds[i]
+    scores = {name: [] for name in (
+        "balanced_accuracy", "accuracy", "macro_f1", "train_balanced_accuracy"
+    )}
+    for i, val_idx in enumerate(folds):
         train_idx = np.concatenate([folds[j] for j in range(k) if j != i])
 
-        clf = DecisionTreeClassifier(random_state=SEED, **params)  # fresh model per fold
+        # Bootstrap sampling happens inside fit, after validation rows are removed.
+        clf = model_class(random_state=SEED + i, **params)
         clf.fit(X[train_idx], y[train_idx])
 
         pred = clf.predict(X[val_idx])
-        val_f1.append(f1_score(y[val_idx], pred, average="macro"))
-        val_acc.append(accuracy_score(y[val_idx], pred))
-        train_f1.append(f1_score(y[train_idx], clf.predict(X[train_idx]), average="macro"))
-    return np.array(val_f1), np.array(val_acc), np.array(train_f1)
+        scores["balanced_accuracy"].append(balanced_accuracy_score(y[val_idx], pred))
+        scores["accuracy"].append(accuracy_score(y[val_idx], pred))
+        scores["macro_f1"].append(f1_score(y[val_idx], pred, average="macro"))
+        scores["train_balanced_accuracy"].append(
+            balanced_accuracy_score(y[train_idx], clf.predict(X[train_idx]))
+        )
+    return {metric: np.array(values) for metric, values in scores.items()}
 
 
-def report(name, params, X, y):
-    f1, acc, tr = cross_validate(params, X, y)
-    print(f"{name:<38} CV macro-F1 {f1.mean():.4f} ± {f1.std():.4f} | "
-          f"CV acc {acc.mean():.4f} | train F1 {tr.mean():.4f}")
-    return {"macro_f1": f1.mean(), "accuracy": acc.mean()}
+def report(name, params, X, y, model_class=ForestClassifier):
+    scores = cross_validate(params, X, y, model_class=model_class)
+    balanced = scores["balanced_accuracy"]
+    print(f"{name}: CV balanced accuracy {balanced.mean():.4f} "
+          f"+/- {balanced.std():.4f} | accuracy {scores['accuracy'].mean():.4f} | "
+          f"macro-F1 {scores['macro_f1'].mean():.4f} | "
+          f"train balanced accuracy {scores['train_balanced_accuracy'].mean():.4f}",
+          flush=True)
+    return {metric: values.mean() for metric, values in scores.items()}
 
 
-if __name__ == "__main__":
-    import os, sys
-    train_path = sys.argv[1] if len(sys.argv) > 1 else TRAIN_CSV
-    test_path = sys.argv[2] if len(sys.argv) > 2 else TEST_CSV
-    X_train, y_train = load(train_path)
-    has_test = os.path.exists(test_path)
+def save_predictions(model, test_df, feature_columns, output_path):
+    """Preserve original test columns and row order, adding the required Target."""
+    if set(test_df.columns) != set(feature_columns):
+        raise ValueError("Test columns must match the training feature columns")
+    result = test_df.copy()
+    result["Target"] = model.predict(test_df.loc[:, feature_columns].to_numpy())
+    result.to_csv(output_path, index=False)
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("train_csv", nargs="?", type=Path, default=TRAIN_CSV)
+    parser.add_argument("test_csv", nargs="?", type=Path, default=TEST_CSV)
+    parser.add_argument("--output", type=Path, default=PRED_CSV)
+    args = parser.parse_args()
+
+    train_df = pd.read_csv(args.train_csv)
+    feature_columns = train_df.drop(columns=[LABEL_COL]).columns.tolist()
+    X_train = train_df[feature_columns].to_numpy()
+    y_train = train_df[LABEL_COL].to_numpy()
+    test_df = pd.read_csv(args.test_csv)
+    if set(test_df.columns) != set(feature_columns):
+        raise ValueError("Test columns must match the training feature columns")
     print(f"Train {X_train.shape}")
     print("Class counts (train):", pd.Series(y_train).value_counts().to_dict(), "\n")
 
-    # 1) Baseline: fully grown tree -> watch the train/CV gap
-    report("default (unrestricted)", {}, X_train, y_train)
+    # Compare shallow and unrestricted trees to inspect the train/CV gap.
+    print("-- Single-tree depth comparison --")
+    for depth in [2, 4, 6, 8, 10, 12, 15, 20, None]:
+        report(f"Tree max_depth={depth}", {"max_depth": depth},
+               X_train, y_train, DecisionTreeClassifier)
 
-    # 2) Effect of depth (bias-variance curve)
-    print("\n-- max_depth --")
-    depth_results = {d: report(f"max_depth={d}", {"max_depth": d}, X_train, y_train)
-                     for d in [2, 4, 6, 8, 10, 12, 15, 20, None]}
-
-    # 3) Small grid over the most important options
-    print("\n-- grid search --")
+    # Identical folds make comparisons fair. Balanced accuracy gives each bean
+    # class equal importance, regardless of how many samples it has.
+    print("\n-- Forest grid search --")
     grid = [
-        {"criterion": c, "max_depth": d, "min_samples_leaf": leaf, "class_weight": cw}
-        for c in ["gini", "entropy"]
-        for d in [6, 8, 10, 12]
-        for leaf in [1, 5, 10, 20]
-        for cw in [None, "balanced"]
+        {"n_estimators": 100, "max_features": features,
+         "max_depth": depth, "min_samples_leaf": leaf}
+        for features in ["sqrt", 0.5]
+        for depth in [12, None]
+        for leaf in [1, 3]
     ]
     scores = [(report(str(p), p, X_train, y_train), p) for p in grid]
-    best_scores, best_params = max(scores, key=lambda t: t[0][SELECT_BY])
-    print(f"\nBest params by {SELECT_BY}: {best_params}\n"
-          f"  CV accuracy {best_scores['accuracy']:.4f} | CV macro-F1 {best_scores['macro_f1']:.4f}")
+    _, chosen_tree_params = max(scores, key=lambda item: item[0][SELECT_BY])
 
-    # 4) Retrain on ALL training data with the chosen params
-    final = DecisionTreeClassifier(random_state=SEED, **best_params).fit(X_train, y_train)
-    print(f"Final tree: depth {final.get_depth()}, leaves {final.get_n_leaves()}")
+    # Also check how the number of voters affects the best configuration.
+    print("\n-- Forest size comparison --")
+    for size in [25, 50, 200]:
+        params = {**chosen_tree_params, "n_estimators": size}
+        scores.append((report(str(params), params, X_train, y_train), params))
+    best_scores, best_params = max(scores, key=lambda item: item[0][SELECT_BY])
+    print(f"\nBest forest by {SELECT_BY}: {best_params}")
+    print(f"# Cross validation Balance Accuracy = "
+          f"{100 * best_scores[SELECT_BY]:.4f} %")
+    print("This CV score was used for parameter selection; it is not an "
+          "independent test score.")
 
-    # 5) Predict the unlabeled test set and save the answers
-    if not os.path.exists(test_path):
-        print(f"(No test file at {test_path} - nothing to predict yet.)")
-        sys.exit(0)
-    test_df = pd.read_csv(test_path)
-    X_test = test_df.drop(columns=[LABEL_COL], errors="ignore").to_numpy()
-    pred = final.predict(X_test)
-    pd.DataFrame({LABEL_COL: pred}).to_csv(PRED_CSV, index=False)
-    print(f"\nWrote {len(pred)} predictions to {PRED_CSV}")
-    print("Predicted class counts:", pd.Series(pred).value_counts().to_dict())
+    # Refit on all training rows only after model selection is complete.
+    final = ForestClassifier(random_state=SEED, **best_params).fit(X_train, y_train)
+    result = save_predictions(final, test_df, feature_columns, args.output)
+    print(f"\nWrote {len(result)} predictions to {args.output}")
+    print("Predicted class counts:", result["Target"].value_counts().to_dict())
+
+
+if __name__ == "__main__":
+    main()
