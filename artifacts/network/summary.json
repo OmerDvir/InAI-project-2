@@ -1,0 +1,62 @@
+{
+  "selected_config": {
+    "name": "deeper",
+    "hidden_sizes": [
+      128,
+      64
+    ],
+    "activation": "relu",
+    "dropout": 0.1,
+    "weight_decay": 0.0001,
+    "learning_rate": 0.001,
+    "batch_size": 128
+  },
+  "cv_balanced_accuracy": 0.9452325853890645,
+  "folds": 5,
+  "epochs": 60,
+  "seed": 0,
+  "device": "cpu",
+  "torch_version": "2.14.1",
+  "comparisons": [
+    {
+      "config": "baseline",
+      "balanced_accuracy": 0.941110897534178,
+      "balanced_accuracy_std": 0.004681706354183038,
+      "accuracy": 0.9306024297076814,
+      "macro_f1": 0.9419384880712007,
+      "train_balanced_accuracy": 0.9477191979980173
+    },
+    {
+      "config": "dropout",
+      "balanced_accuracy": 0.9404627523847111,
+      "balanced_accuracy_std": 0.004367726467807422,
+      "accuracy": 0.9302023287570543,
+      "macro_f1": 0.9415059444531624,
+      "train_balanced_accuracy": 0.9455399835320654
+    },
+    {
+      "config": "weight_decay",
+      "balanced_accuracy": 0.9415615943962271,
+      "balanced_accuracy_std": 0.005038657850713087,
+      "accuracy": 0.9310017799316194,
+      "macro_f1": 0.9424327390827358,
+      "train_balanced_accuracy": 0.9438837234098066
+    },
+    {
+      "config": "deeper",
+      "balanced_accuracy": 0.9452325853890645,
+      "balanced_accuracy_std": 0.004620688777561172,
+      "accuracy": 0.9345022839823527,
+      "macro_f1": 0.9458258426146408,
+      "train_balanced_accuracy": 0.9528149798096226
+    },
+    {
+      "config": "tanh",
+      "balanced_accuracy": 0.9372624437077729,
+      "balanced_accuracy_std": 0.004224451179371906,
+      "accuracy": 0.9260011246031462,
+      "macro_f1": 0.9380451126939244,
+      "train_balanced_accuracy": 0.939884426818484
+    }
+  ]
+}

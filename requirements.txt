@@ -1,4 +1,6 @@
 scikit-learn
 pandas
-
 numpy
+torch
+tensorboard
+matplotlib

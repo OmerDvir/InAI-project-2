@@ -1,2 +1,6 @@
 .idea/
 .venv/
+__pycache__/
+artifacts/network/tensorboard/
+artifacts/network/histories/
+artifacts/network/out_of_fold_predictions.csv
